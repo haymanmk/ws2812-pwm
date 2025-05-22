@@ -1,0 +1,5 @@
+manifest:
+
+  remotes:
+    - name: haymanmk
+      url-base: https://github.com/haymanmk

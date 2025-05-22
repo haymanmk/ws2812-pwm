@@ -1,0 +1,14 @@
+
+menuconfig WS2812_PWM
+    bool "ws2812 PWM support"
+    help
+        Enable this option to use the PWM peripheral to drive the WS2812 LEDs.
+        This is a more efficient way to drive the LEDs compared to using the
+        GPIO peripheral, as it allows for more precise timing and reduces CPU
+        load. However, it may not be compatible with all LED strips.
+        If you are using a different LED strip or do not need the extra
+        performance, you can disable this option.
+    
+if WS2812_PWM
+
+endif
