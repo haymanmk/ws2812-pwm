@@ -1,0 +1,3 @@
+menu "Extra Drivers"
+rsource "led_strip/Kconfig"
+endmenu

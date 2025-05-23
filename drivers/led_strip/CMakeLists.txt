@@ -1,0 +1,2 @@
+
+add_subdirectory_ifdef(CONFIG_LED_STRIP ws2812_pwm)

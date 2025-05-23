@@ -1,0 +1,30 @@
+config WS2812_PWM
+    bool "ws2812 PWM support"
+    default y
+    depends on DT_HAS_WORLDSEMI_WS2812_PWM_ENABLED
+    help
+        Enable this option to use the PWM peripheral to drive the WS2812 LEDs.
+        This is a more efficient way to drive the LEDs compared to using the
+        GPIO peripheral, as it allows for more precise timing and reduces CPU
+        load. However, it may not be compatible with all LED strips.
+        If you are using a different LED strip or do not need the extra
+        performance, you can disable this option.
+
+if WS2812_PWM
+
+config WS2812_PWM_LOG_LEVEL
+    int "Log level"
+    default 3
+    range 0 7
+    help
+        Set the log level for the ws2812 PWM driver.
+        0: No logging
+        1: Error
+        2: Warning
+        3: Info
+        4: Debug
+        5: Trace
+        6: Verbose
+        7: All messages
+
+endif # WS2812_PWM
