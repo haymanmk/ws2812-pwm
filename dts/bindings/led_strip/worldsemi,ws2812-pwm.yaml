@@ -81,6 +81,16 @@ compatible: "worldsemi,ws2812-pwm"
 include: [ws2812.yaml]
 
 properties:
+  dmas:
+    type: phandle-array
+    required: true
+    description: 
+      DMA phandle and specifier for the dma peripheral bridging the
+      souce memory and the timer peripheral generating PWM pulses.
+  dma-names:
+    type: string-array
+    description: |
+      DMA channel names, must match the dmas property.
   pwms:
     type: phandle-array
     required: true

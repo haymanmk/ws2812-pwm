@@ -2,6 +2,7 @@ config WS2812_PWM
     bool "ws2812 PWM support"
     default y
     depends on DT_HAS_WORLDSEMI_WS2812_PWM_ENABLED
+    select DMA
     help
         Enable this option to use the PWM peripheral to drive the WS2812 LEDs.
         This is a more efficient way to drive the LEDs compared to using the
@@ -12,9 +13,15 @@ config WS2812_PWM
 
 if WS2812_PWM
 
+config WS2812_PWM_LOG_LEVEL_DBG
+    bool "Set log level as Debug"
+    help
+        set the log level to the value of debug
+
 config WS2812_PWM_LOG_LEVEL
     int "Log level"
-    default 3
+    default 4 if WS2812_PWM_LOG_LEVEL_DBG
+    default 3 
     range 0 7
     help
         Set the log level for the ws2812 PWM driver.
