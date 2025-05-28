@@ -3,6 +3,7 @@ config WS2812_PWM
     default y
     depends on DT_HAS_WORLDSEMI_WS2812_PWM_ENABLED
     select DMA
+    select PWM
     help
         Enable this option to use the PWM peripheral to drive the WS2812 LEDs.
         This is a more efficient way to drive the LEDs compared to using the
