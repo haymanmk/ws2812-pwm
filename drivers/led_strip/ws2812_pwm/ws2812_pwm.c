@@ -67,13 +67,19 @@ static int ws2812_pwm_update_buffer(const struct device *dev,
                                 size_t num_leds);
 static void ws2812_pwm_reset_signal(const struct device *dev);
 
-static struct dma_block_config block_cfg;
-static volatile uint32_t pwm_buffer[BLOCK_SIZE_WORDS];
+
+/**
+ * @brief Create degug output pin to reveal certain information
+ */
+static const struct gpio_dt_spec debug_pin = GPIO_DT_SPEC_GET(DT_NODELABEL(usr_dbg), gpios);
 
 /* data */
 struct ws2812_pwm_data {
     volatile uint8_t flags;
     struct led_rgb *led_data; // pointer to the led RGB data
+    uint32_t pwm_buffer[BLOCK_SIZE_WORDS]; // buffer for the PWM data
+    struct dma_config dma_cfg; // DMA configuration
+    struct dma_block_config block_cfg; // DMA block configuration
     size_t num_leds; // number of LEDs in the chain
     volatile uint16_t num_led_buffer_updated; // number of LED whose PWM buffer has been updated
     // Note: the buffer is updated in batches of BATCH_UPDATE_SIZE LEDs
@@ -132,6 +138,18 @@ static void (*const enable_dma_request[TIMER_MAX_CHANNELS])(TIM_TypeDef *) = {
     LL_TIM_EnableDMAReq_CC3, LL_TIM_EnableDMAReq_CC4,
 };
 
+// disable the DMA request for the timer channel
+static void (*const disable_dma_request[TIMER_MAX_CHANNELS])(TIM_TypeDef *) = {
+    LL_TIM_DisableDMAReq_CC1, LL_TIM_DisableDMAReq_CC2,
+    LL_TIM_DisableDMAReq_CC3, LL_TIM_DisableDMAReq_CC4,
+};
+
+// clear interrupt flags for the timer channel
+static void (*const clear_interrupt_flags[TIMER_MAX_CHANNELS])(TIM_TypeDef *) = {
+    LL_TIM_ClearFlag_CC1, LL_TIM_ClearFlag_CC2,
+    LL_TIM_ClearFlag_CC3, LL_TIM_ClearFlag_CC4,
+};
+
 /* DMA transfer complete callback */
 static void ws2812_pwm_dma_tc_callback(const struct device *dev, 
                                        void *user_data,
@@ -143,6 +161,11 @@ static void ws2812_pwm_dma_tc_callback(const struct device *dev,
     // create atomic operation by locking the IRQ
     // int key = irq_lock();
     __disable_irq();
+    
+    /**
+     * Turn on the debug pin to reveal certain information
+     */
+    gpio_pin_set_dt(&debug_pin, 1);
 
     const struct device *ws2812_dev = (const struct device *)user_data;
     struct ws2812_pwm_data *ws2812_data = ws2812_dev->data;
@@ -200,6 +223,11 @@ static void ws2812_pwm_dma_tc_callback(const struct device *dev,
     }
 
 exit:
+    /**
+     * Turn off the debug pin to reveal certain information
+     */
+    gpio_pin_set_dt(&debug_pin, 0);
+
     // enable irq after the operation
     // irq_unlock(key);
     __enable_irq();
@@ -241,12 +269,11 @@ static int ws2812_pwm_setup_pwm(const struct device *dev)
     // Configure the timer for PWM mode
     LL_TIM_SetCounterMode(tim, LL_TIM_COUNTERMODE_UP);
     LL_TIM_SetAutoReload(tim, data->period);
-    LL_TIM_DisableARRPreload(tim);
+    LL_TIM_EnableARRPreload(tim);
     LL_TIM_OC_SetMode(tim, ll_channel, LL_TIM_OCMODE_PWM1);
     LL_TIM_OC_SetPolarity(tim, ll_channel, LL_TIM_OCPOLARITY_HIGH);
     LL_TIM_OC_DisableFast(tim, ll_channel);
     set_timer_compare[pwm_pha_cfg->channel - 1](tim, 0);
-    enable_dma_request[pwm_pha_cfg->channel - 1](tim);
 
     // reset master slave mode
     LL_TIM_SetTriggerOutput(tim, LL_TIM_TRGO_RESET);
@@ -288,10 +315,19 @@ static int ws2812_pwm_setup_pwm(const struct device *dev)
  */
 static int ws2812_pwm_start(const struct device *dev)
 {
+    int ret = 0;
     const struct ws2812_pwm_config *config = dev->config;
+    struct ws2812_pwm_data *data = dev->data;
     const struct device *pwm_dev = config->pwm_dev;
     const struct pwm_stm32_config *pwm_cfg = pwm_dev->config;
     const ws2812_dma_pha_config_t *dma_pha_cfg = &config->dma_config;
+
+    // configure the DMA transfer
+    ret = dma_config(config->dma_dev, dma_pha_cfg->channel, &data->dma_cfg);
+    if (ret < 0) {
+        LOG_ERR("Failed to configure DMA: %d", ret);
+        goto exit;
+    }
 
     // Retrieve Timer handler
     TIM_TypeDef *tim = pwm_cfg->timer;
@@ -300,12 +336,23 @@ static int ws2812_pwm_start(const struct device *dev)
     LL_TIM_SetCounter(tim, 0);
 
     // start dma transfer
-    int ret = dma_start(config->dma_dev, dma_pha_cfg->channel);
+    ret = dma_start(config->dma_dev, dma_pha_cfg->channel);
+    if (ret < 0) {
+        LOG_ERR("Failed to start DMA: %d", ret);
+        goto exit;
+    }
+
+    // enable the DMA request for the timer channel
+    enable_dma_request[config->pwm_config.channel - 1](tim);
+
+    // enable the timer channel
+    LL_TIM_CC_EnableChannel(tim, channel_to_ll[config->pwm_config.channel - 1]);
 
     // Enable the timer
     LL_TIM_EnableCounter(tim);
     // LOG_DBG("PWM started for %s", pwm_dev->name);
 
+exit:
     return ret;
 }
 
@@ -319,10 +366,19 @@ static int ws2812_pwm_stop(const struct device *dev)
     // Retrieve Timer handler
     TIM_TypeDef *tim = pwm_cfg->timer;
 
+    // Diable the timer channel
+    LL_TIM_CC_DisableChannel(tim, channel_to_ll[config->pwm_config.channel - 1]);
+
     // Disable the timer
     LL_TIM_DisableCounter(tim);
 
-    // stop dma transfer
+    // Disable timer DMA request
+    disable_dma_request[config->pwm_config.channel - 1](tim);
+
+    // clear the interrupt flags for the timer channel
+    clear_interrupt_flags[config->pwm_config.channel - 1](tim);
+
+    // Stop dma transfer
     int ret = dma_stop(config->dma_dev, dma_pha_cfg->channel);
 
     // Reset the compare register
@@ -343,12 +399,25 @@ static void ws2812_pwm_reset_signal(const struct device *dev)
     uint16_t len_data = HALF_BLOCK_SIZE_WORDS; // 8 bits per color, 3 colors (RGB), 5 LEDs per batch
     uint16_t start_index = ((data->num_led_buffer_updated + data->num_reset_isr_issued) * len_data) % BLOCK_SIZE_WORDS;
     // set memory to zero for the reset signal
-    memset(pwm_buffer+start_index, 0, len_data * sizeof(uint32_t));
+    memset(data->pwm_buffer+start_index, 0, len_data * sizeof(uint32_t));
 }
 
 /* function to initialize the driver */
 static int ws2812_pwm_init(const struct device *dev)
 {
+    /**
+     * Create a debug output pin to reveal certain information
+     * Delete this if not needed.
+     */
+    if (!device_is_ready(debug_pin.port)) {
+        LOG_ERR("Debug pin %s is not ready", debug_pin.port->name);
+        return -ENODEV;
+    }
+    if (gpio_pin_configure_dt(&debug_pin, GPIO_OUTPUT_INACTIVE) < 0) {
+        LOG_ERR("Failed to configure debug pin %s", debug_pin.port->name);
+        return -EIO;
+    }
+
     int ret = 0;
     const struct ws2812_pwm_config *ws2812_cfg = dev->config;
     const struct device *dma_dev = ws2812_cfg->dma_dev;
@@ -376,11 +445,11 @@ static int ws2812_pwm_init(const struct device *dev)
     // compute the final clock frequency with prescaler
     ws2812_data->pwm_freq = pwm_cycles_per_sec / (pwm_cfg->prescaler + 1);
     // compute the delay for the high and low pulses. [pulse width(ns)] * [pwm_freq(Hz)] / 10^9
-    float delay_t1h_ns = (float)ws2812_cfg->delay_t1h_ns * (float)(ws2812_data->pwm_freq / 1e9);
-    float delay_t0h_ns = (float)ws2812_cfg->delay_t0h_ns * (float)(ws2812_data->pwm_freq / 1e9);
+    float delay_t1h_f = (float)ws2812_cfg->delay_t1h_ns * (float)(ws2812_data->pwm_freq / 1e9);
+    float delay_t0h_f = (float)ws2812_cfg->delay_t0h_ns * (float)(ws2812_data->pwm_freq / 1e9);
     // round the delay to the nearest integer
-    ws2812_data->delay_t1h = (uint32_t)roundf(delay_t1h_ns);
-    ws2812_data->delay_t0h = (uint32_t)roundf(delay_t0h_ns);
+    ws2812_data->delay_t1h = (uint32_t)roundf(delay_t1h_f);
+    ws2812_data->delay_t0h = (uint32_t)roundf(delay_t0h_f);
     // compute the PWM period in ticks
     ws2812_data->period = (uint32_t)roundf(((float)pwm_pha_cfg->period * (float)(ws2812_data->pwm_freq / 1e9)));
     // compute the total number of reset ISR to be issued
@@ -397,8 +466,8 @@ static int ws2812_pwm_init(const struct device *dev)
             dma_pha_cfg->channel, dma_pha_cfg->slot, dma_pha_cfg->channel_config, dma_pha_cfg->features);
 
     // Initialize each block configuration
-    block_cfg = (struct dma_block_config){
-        .source_address = (uint32_t)pwm_buffer,
+    ws2812_data->block_cfg = (struct dma_block_config){
+        .source_address = (uint32_t)ws2812_data->pwm_buffer,
         .dest_address = WS2812_DMA_GET_TIM_CCR(pwm_pha_cfg->channel, tim), // address of timer peripheral
         .block_size = BLOCK_SIZE_WORDS * sizeof(uint32_t), // size in bytes
         .next_block = NULL,
@@ -410,28 +479,28 @@ static int ws2812_pwm_init(const struct device *dev)
         .fifo_mode_control = STM32_DMA_FEATURES_FIFO_THRESHOLD(dma_pha_cfg->features),
     };
     
-    struct dma_config dma_cfg = {
+    ws2812_data->dma_cfg = (struct dma_config){
         .dma_slot = dma_pha_cfg->slot,
         .channel_direction = MEMORY_TO_PERIPHERAL,
         .complete_callback_en = true,
         .channel_priority = STM32_DMA_CONFIG_PRIORITY(dma_pha_cfg->channel_config),
         .source_data_size = STM32_DMA_CONFIG_MEMORY_DATA_SIZE(dma_pha_cfg->channel_config),
         .dest_data_size = STM32_DMA_CONFIG_PERIPHERAL_DATA_SIZE(dma_pha_cfg->channel_config),
-        .source_burst_length = 1, // single bust
-        .dest_burst_length = 1, // single burst
+        .source_burst_length = 1, // single bust, no fifo
+        .dest_burst_length = 1, // single burst, no fifo
         .block_count = 1,
-        .head_block = &block_cfg,
+        .head_block = &ws2812_data->block_cfg,
         .user_data = (void *)dev, // pass the device pointer as user data
         .dma_callback = &ws2812_pwm_dma_tc_callback,
     };
 
     // set the DMA configuration
-    ret = dma_config(dma_dev, dma_pha_cfg->channel, &dma_cfg);
-    if (ret < 0) {
-        LOG_ERR("Failed to configure DMA: %d", ret);
-        return ret;
-    }
-    LOG_DBG("DMA configured successfully for %s", dma_dev_name);
+    // ret = dma_config(dma_dev, dma_pha_cfg->channel, &dma_cfg);
+    // if (ret < 0) {
+    //     LOG_ERR("Failed to configure DMA: %d", ret);
+    //     return ret;
+    // }
+    // LOG_DBG("DMA configured successfully for %s", dma_dev_name);
 
     /* Configure PWM */
     ws2812_pwm_setup_pwm(dev);
@@ -449,6 +518,7 @@ static int ws2812_pwm_update_buffer(const struct device *dev,
                                 size_t num_leds)
 {
     struct ws2812_pwm_data *ws2812_data = dev->data;
+    uint32_t *pwm_buffer = ws2812_data->pwm_buffer;
     // check if the index is valid
     if (index_led >= ws2812_data->num_leds) {
         LOG_ERR("Index LED out of bounds: %u >= %zu", index_led, ws2812_data->num_leds);
@@ -534,7 +604,7 @@ static int ws2812_pwm_update_rgb(const struct device *dev,
     ws2812_pwm_update_buffer(dev, 0, 2 * BATCH_UPDATE_SIZE);
 
     // update the number of LED buffer updated
-    ws2812_data->num_led_buffer_updated = BATCH_UPDATE_SIZE;
+    ws2812_data->num_led_buffer_updated = 2 * BATCH_UPDATE_SIZE;
 
     // set flag to indicate that the buffer is being updated
     ws2812_data->flags |= WS2812_PWM_FLAG_TASK_UPDATE_BUFFER;
