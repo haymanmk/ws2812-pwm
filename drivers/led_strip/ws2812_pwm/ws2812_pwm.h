@@ -24,7 +24,7 @@ typedef struct ws2812_pwm_pha_config {
 
 #define WS2812_DMA_GET_SOURCE_ADDR_ADJ(channel_config) \
     STM32_DMA_CONFIG_MEMORY_ADDR_INC(channel_config) ? \
-    0b00 : 0b01
+    0b00 : 0b10
 
 #define WS2812_DMA_GET_DEST_ADDR_ADJ(channel_config) \
     STM32_DMA_CONFIG_PERIPHERAL_ADDR_INC(channel_config) ? \

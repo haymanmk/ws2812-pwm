@@ -270,6 +270,7 @@ static int ws2812_pwm_setup_pwm(const struct device *dev)
     LL_TIM_SetCounterMode(tim, LL_TIM_COUNTERMODE_UP);
     LL_TIM_SetAutoReload(tim, data->period);
     LL_TIM_EnableARRPreload(tim);
+    LL_TIM_OC_EnablePreload(tim, ll_channel); // the CCR shadow register is updated only when the update event occurs
     LL_TIM_OC_SetMode(tim, ll_channel, LL_TIM_OCMODE_PWM1);
     LL_TIM_OC_SetPolarity(tim, ll_channel, LL_TIM_OCPOLARITY_HIGH);
     LL_TIM_OC_DisableFast(tim, ll_channel);
@@ -543,8 +544,8 @@ static int ws2812_pwm_update_buffer(const struct device *dev,
         goto exit;
     }
 
-    uint8_t dts_color_map[3];
-    memcpy(dts_color_map, ws2812_cfg->color_mapping, sizeof(dts_color_map));
+    // uint8_t dts_color_map[3];
+    // memcpy(dts_color_map, ws2812_cfg->color_mapping, sizeof(dts_color_map));
     uint8_t color_mapping[LED_COLOR_ID_MAX];
 
     uint16_t end_index = index_led + num_leds;
@@ -566,11 +567,11 @@ static int ws2812_pwm_update_buffer(const struct device *dev,
         // and the data is set in the order of MSB first.
         for (uint8_t j = 0; j < 8; j++)
         {
-            pwm_buffer[start_index + j] = (color_mapping[dts_color_map[0]] & (1 << (7 - j))) ? 
+            pwm_buffer[start_index + j] = (color_mapping[ws2812_cfg->color_mapping[0]] & (1 << (7 - j))) ? 
                 ws2812_data->delay_t1h : ws2812_data->delay_t0h;
-            pwm_buffer[start_index + j + 8] = (color_mapping[dts_color_map[1]] & (1 << (7 - j))) ?
+            pwm_buffer[start_index + j + 8] = (color_mapping[ws2812_cfg->color_mapping[1]] & (1 << (7 - j))) ?
                 ws2812_data->delay_t1h : ws2812_data->delay_t0h;
-            pwm_buffer[start_index + j + 16] = (color_mapping[dts_color_map[2]] & (1 << (7 - j))) ?
+            pwm_buffer[start_index + j + 16] = (color_mapping[ws2812_cfg->color_mapping[2]] & (1 << (7 - j))) ?
                 ws2812_data->delay_t1h : ws2812_data->delay_t0h;
         }
     }
