@@ -544,8 +544,6 @@ static int ws2812_pwm_update_buffer(const struct device *dev,
         goto exit;
     }
 
-    // uint8_t dts_color_map[3];
-    // memcpy(dts_color_map, ws2812_cfg->color_mapping, sizeof(dts_color_map));
     uint8_t color_mapping[LED_COLOR_ID_MAX];
 
     uint16_t end_index = index_led + num_leds;
